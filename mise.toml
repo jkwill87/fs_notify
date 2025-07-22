@@ -1,0 +1,24 @@
+[tools]
+erlang = "27"
+elixir = "1.18.4-otp-27"
+rust = "stable"
+
+[env]
+MIX_ENV = "dev"
+
+[tasks]
+deps = "mix deps.get"
+compile = "mix compile"
+test = "mix test"
+format = "mix format"
+dialyzer = "mix dialyzer"
+credo = "mix credo"
+
+"rust:check" = "cd native/fs_notify && cargo check"
+"rust:test" = "cd native/fs_notify && cargo test"
+"rust:fmt" = "cd native/fs_notify && cargo fmt"
+"rust:clippy" = "cd native/fs_notify && cargo clippy"
+
+"check:all" = ["rust:check", "compile", "test"]
+"format:all" = ["rust:fmt", "format"]
+"lint:all" = ["rust:clippy", "credo"]

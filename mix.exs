@@ -1,13 +1,20 @@
-defmodule FsnotifyEx.MixProject do
+defmodule FSNotify.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :fsnotify_ex,
+      app: :fs_notify,
       version: "0.1.0",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+      compilers: Mix.compilers(),
+      rustler_crates: [
+        fs_notify: [
+          path: "native/fs_notify",
+          mode: :release
+        ]
+      ]
     ]
   end
 
@@ -21,8 +28,10 @@ defmodule FsnotifyEx.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
+      {:rustler, "~> 0.36.2"},
+      {:recode, "~> 0.7.3", only: :dev, runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.38.2", only: :dev, runtime: false}
     ]
   end
 end
