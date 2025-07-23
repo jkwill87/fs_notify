@@ -31,41 +31,67 @@ end
 ### Basic Example
 
 ```elixir
-# Start watching a directory
-{:ok, watcher_pid} = FSNotify.start_watching("/path/to/watch")
+# Start watching a single directory
+{:ok, watcher} = FSNotify.start_link("/path/to/watch")
+
+# Start watching multiple directories
+{:ok, watcher} = FSNotify.start_link(["/path1", "/path2"])
+
+# With options
+{:ok, watcher} = FSNotify.start_link("/path", recursive: false, name: MyWatcher)
 
 # Subscribe to events
-FSNotify.subscribe(watcher_pid)
+FSNotify.subscribe(watcher)
 
 # Listen for events
 receive do
-  {:file_event, %FSNotify.Event{kind: kind, path: path, file_type: file_type}} ->
-    IO.puts("#{kind} #{file_type}: #{path}")
+  {:file_event, ^watcher, {path, events}} ->
+    IO.puts("Events #{inspect(events)} occurred on #{path}")
+  {:file_event, ^watcher, :stop} ->
+    IO.puts("Watcher stopped")
 end
 
 # Stop watching
-FSNotify.stop_watching(watcher_pid)
+GenServer.stop(watcher)
+```
+
+### API Compatibility
+
+FSNotify follows the same subscription API pattern as the popular [file_system](https://github.com/falood/file_system) library, making it easy to switch between implementations:
+
+```elixir
+# Both libraries use the same message format
+{:file_event, watcher_pid, {path, events}}
+{:file_event, watcher_pid, :stop}
 ```
 
 ### Options
 
 ```elixir
-# Watch recursively (default)
-{:ok, pid} = FSNotify.start_watching("/path", recursive: true)
+# Watch recursively (default: true)
+{:ok, pid} = FSNotify.start_link("/path", recursive: true)
 
 # Watch only the specific directory, not subdirectories
-{:ok, pid} = FSNotify.start_watching("/path", recursive: false)
+{:ok, pid} = FSNotify.start_link("/path", recursive: false)
+
+# Named process
+{:ok, pid} = FSNotify.start_link("/path", name: MyFileWatcher)
 ```
 
 ### Event Types
 
-Events are delivered as `%FSNotify.Event{}` structs with the following fields:
+Events are delivered as lists of atoms in the message tuple `{path, events}`:
 
-- `kind`: `:created`, `:modified`, `:removed`, `:renamed`, `:other`, or `:unknown`
-- `path`: String path of the affected file or directory
-- `file_type`: `:file`, `:directory`, or `:unknown`
+- `:created` - File or directory was created
+- `:modified` - File or directory was modified
+- `:removed` - File or directory was removed
+- `:renamed` - File or directory was renamed
+- `:other` - Other events
+- `:unknown` - Unknown event type
 
-### Helper Functions
+### Internal Event Structure
+
+Internally, FSNotify uses `%FSNotify.Event{}` structs with helper functions:
 
 ```elixir
 event = %FSNotify.Event{kind: :created, path: "/test.txt", file_type: :file}

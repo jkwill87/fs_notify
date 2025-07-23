@@ -77,40 +77,120 @@ defmodule FSNotifyTest do
     end
   end
 
-  describe "FSNotify" do
-    test "can start and stop watching" do
+  describe "FSNotify with start_link API" do
+    test "can start with single path" do
       path = File.cwd!()
 
-      case FSNotify.start_watching(path) do
-        {:ok, pid} ->
-          assert is_pid(pid)
-          assert Process.alive?(pid)
+      assert {:ok, pid} = FSNotify.start_link(path)
+      assert is_pid(pid)
+      assert Process.alive?(pid)
 
-          # Test stopping
-          assert :ok = FSNotify.stop_watching(pid)
-
-          # Give it a moment to stop
-          Process.sleep(10)
-          refute Process.alive?(pid)
-
-        {:error, reason} ->
-          flunk("Failed to start watching: #{inspect(reason)}")
-      end
+      # Stop the watcher
+      GenServer.stop(pid)
+      Process.sleep(10)
+      refute Process.alive?(pid)
     end
 
-    test "can subscribe and unsubscribe" do
+    test "can start with multiple paths" do
+      paths = [File.cwd!(), System.tmp_dir!()]
+
+      assert {:ok, pid} = FSNotify.start_link(paths)
+      assert is_pid(pid)
+      assert Process.alive?(pid)
+
+      GenServer.stop(pid)
+    end
+
+    test "can start with options" do
       path = File.cwd!()
 
-      case FSNotify.start_watching(path) do
-        {:ok, pid} ->
-          assert :ok = FSNotify.subscribe(pid)
-          assert :ok = FSNotify.unsubscribe(pid)
+      assert {:ok, pid} = FSNotify.start_link(path, recursive: false)
+      assert is_pid(pid)
+      assert Process.alive?(pid)
 
-          FSNotify.stop_watching(pid)
+      GenServer.stop(pid)
+    end
 
-        {:error, reason} ->
-          flunk("Failed to start watching: #{inspect(reason)}")
-      end
+    test "can start with name" do
+      path = File.cwd!()
+
+      assert {:ok, pid} = FSNotify.start_link(path, name: TestWatcher)
+      assert is_pid(pid)
+      assert Process.whereis(TestWatcher) == pid
+
+      GenServer.stop(TestWatcher)
+    end
+
+    test "subscribe receives events in file_system format" do
+      path = File.cwd!()
+
+      {:ok, watcher} = FSNotify.start_link(path)
+      assert :ok = FSNotify.subscribe(watcher)
+
+      # Wait a bit for subscription to be processed
+      Process.sleep(10)
+
+      # When the watcher stops, we should receive a stop message
+      GenServer.stop(watcher)
+
+      assert_receive {:file_event, ^watcher, :stop}, 1000
+    end
+
+    test "multiple subscribers receive events" do
+      path = File.cwd!()
+      {:ok, watcher} = FSNotify.start_link(path)
+
+      # Start multiple subscriber processes
+      parent = self()
+      
+      spawn(fn ->
+        FSNotify.subscribe(watcher)
+        receive do
+          msg -> send(parent, {:subscriber1, msg})
+        after
+          1000 -> send(parent, {:subscriber1, :timeout})
+        end
+      end)
+
+      spawn(fn ->
+        FSNotify.subscribe(watcher)
+        receive do
+          msg -> send(parent, {:subscriber2, msg})
+        after
+          1000 -> send(parent, {:subscriber2, :timeout})
+        end
+      end)
+
+      # Give subscribers time to subscribe
+      Process.sleep(50)
+
+      # Stop the watcher
+      GenServer.stop(watcher)
+
+      # Both subscribers should receive the stop message
+      assert_receive {:subscriber1, {:file_event, ^watcher, :stop}}, 1000
+      assert_receive {:subscriber2, {:file_event, ^watcher, :stop}}, 1000
+    end
+
+    test "dead subscribers are removed automatically" do
+      path = File.cwd!()
+      {:ok, watcher} = FSNotify.start_link(path)
+
+      # Create a subscriber that dies immediately
+      spawn(fn ->
+        FSNotify.subscribe(watcher)
+        # Exit immediately
+      end)
+
+      # Give it time to subscribe and die
+      Process.sleep(100)
+
+      # Subscribe ourselves
+      FSNotify.subscribe(watcher)
+
+      # Stop the watcher - we should still receive the stop message
+      GenServer.stop(watcher)
+      assert_receive {:file_event, ^watcher, :stop}, 1000
     end
   end
 end

@@ -14,37 +14,39 @@ defmodule BasicUsageExample do
     IO.puts("Try creating, modifying, or deleting files in this directory...")
     IO.puts("Press Ctrl+C to stop\n")
     
-    case FSNotify.start_watching(path, recursive: true) do
+    case FSNotify.start_link(path, recursive: true) do
       {:ok, watcher_pid} ->
         # Subscribe to events
         FSNotify.subscribe(watcher_pid)
         
         # Listen for events
-        listen_for_events()
-        
-        # Clean up
-        FSNotify.stop_watching(watcher_pid)
+        listen_for_events(watcher_pid)
         
       {:error, reason} ->
         IO.puts("Failed to start watching: #{inspect(reason)}")
     end
   end
   
-  defp listen_for_events do
+  defp listen_for_events(watcher_pid) do
     receive do
-      {:file_event, event} ->
-        case event do
-          %FSNotify.Event{kind: kind, path: path, file_type: file_type} ->
-            IO.puts("📁 #{format_event_kind(kind)} #{format_file_type(file_type)}: #{path}")
-        end
+      {:file_event, ^watcher_pid, {path, events}} ->
+        IO.puts("📁 #{format_events(events)} #{path}")
+        listen_for_events(watcher_pid)
         
-        listen_for_events()
+      {:file_event, ^watcher_pid, :stop} ->
+        IO.puts("Watcher stopped")
         
     after
       1000 ->
         # Continue listening
-        listen_for_events()
+        listen_for_events(watcher_pid)
     end
+  end
+  
+  defp format_events(events) do
+    events
+    |> Enum.map(&format_event_kind/1)
+    |> Enum.join(", ")
   end
   
   defp format_event_kind(:created), do: "CREATED"
@@ -53,10 +55,6 @@ defmodule BasicUsageExample do
   defp format_event_kind(:renamed), do: "RENAMED"
   defp format_event_kind(:other), do: "OTHER"
   defp format_event_kind(:unknown), do: "UNKNOWN"
-  
-  defp format_file_type(:file), do: "file"
-  defp format_file_type(:directory), do: "directory"
-  defp format_file_type(:unknown), do: "item"
 end
 
 BasicUsageExample.run()

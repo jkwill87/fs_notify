@@ -9,17 +9,17 @@ defmodule FSNotify.Watcher do
   alias FSNotify.{Native, Event}
 
   defstruct [
-    :path,
-    :watcher_id,
-    :recursive,
-    subscribers: MapSet.new()
+    paths: [],
+    watchers: %{},
+    recursive: true,
+    subscribers: %{}
   ]
 
   @type t :: %__MODULE__{
-          path: String.t(),
-          watcher_id: non_neg_integer() | nil,
+          paths: [String.t()],
+          watchers: %{String.t() => non_neg_integer()},
           recursive: boolean(),
-          subscribers: MapSet.t(pid())
+          subscribers: %{reference() => pid()}
         }
 
   # Client API
@@ -27,80 +27,82 @@ defmodule FSNotify.Watcher do
   @doc """
   Start a new watcher GenServer.
   """
-  def start_link({path, opts}) do
-    GenServer.start_link(__MODULE__, {path, opts})
-  end
-
-  @doc """
-  Start a new watcher GenServer with a name.
-  """
-  def start_link({path, opts}, name) do
-    GenServer.start_link(__MODULE__, {path, opts}, name: name)
+  def start_link({path_or_paths, opts}, genserver_opts \\ []) do
+    GenServer.start_link(__MODULE__, {path_or_paths, opts}, genserver_opts)
   end
 
   # Server Callbacks
 
   @impl true
-  def init({path, opts}) do
+  def init({path_or_paths, opts}) do
+    paths = List.wrap(path_or_paths)
     recursive = Keyword.get(opts, :recursive, true)
+    
+    # Start watchers for each path
+    watchers = 
+      paths
+      |> Enum.map(fn path ->
+        case Native.start_watcher(path, recursive) do
+          {:ok, watcher_id} ->
+            Logger.info("Started file watcher for path: #{path} (recursive: #{recursive})")
+            {path, watcher_id}
+          {:error, reason} ->
+            Logger.error("Failed to start file watcher for path: #{path}, reason: #{inspect(reason)}")
+            nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.into(%{})
 
-    case Native.start_watcher(path, recursive) do
-      {:ok, watcher_id} ->
-        state = %__MODULE__{
-          path: path,
-          watcher_id: watcher_id,
-          recursive: recursive
-        }
+    if map_size(watchers) == 0 do
+      {:stop, :no_watchers_started}
+    else
+      state = %__MODULE__{
+        paths: paths,
+        watchers: watchers,
+        recursive: recursive,
+        subscribers: %{}
+      }
 
-        Logger.info("Started file watcher for path: #{path} (recursive: #{recursive})")
+      # Schedule periodic event polling
+      schedule_event_polling()
 
-        # Schedule periodic event polling
-        schedule_event_polling()
-
-        {:ok, state}
-
-      {:error, reason} ->
-        Logger.error("Failed to start file watcher for path: #{path}, reason: #{inspect(reason)}")
-        {:stop, reason}
+      {:ok, state}
     end
   end
 
   @impl true
-  def handle_call({:subscribe, pid}, _from, state) do
-    new_subscribers = MapSet.put(state.subscribers, pid)
+  def handle_call(:subscribe, {pid, _tag}, state) do
+    ref = Process.monitor(pid)
+    new_subscribers = Map.put(state.subscribers, ref, pid)
     new_state = %{state | subscribers: new_subscribers}
-
-    # Monitor the subscribing process
-    Process.monitor(pid)
 
     Logger.debug("Process #{inspect(pid)} subscribed to file events")
     {:reply, :ok, new_state}
   end
 
   @impl true
-  def handle_call({:unsubscribe, pid}, _from, state) do
-    new_subscribers = MapSet.delete(state.subscribers, pid)
-    new_state = %{state | subscribers: new_subscribers}
-
-    Logger.debug("Process #{inspect(pid)} unsubscribed from file events")
-    {:reply, :ok, new_state}
-  end
-
-  @impl true
   def handle_info(:poll_events, state) do
-    # Poll for events from the native watcher
-    case Native.get_events(state.watcher_id) do
-      {:ok, events} ->
-        # Convert raw events to Event structs and send to subscribers
-        events
-        |> Enum.map(&Event.from_tuple/1)
-        |> Enum.each(fn event ->
-          broadcast_event(state.subscribers, event)
-        end)
+    # Poll for events from all native watchers
+    state.watchers
+    |> Enum.each(fn {_path, watcher_id} ->
+      case Native.get_events(watcher_id) do
+        {:ok, events} ->
+          # Convert raw events to Event structs and broadcast
+          events
+          |> Enum.map(&Event.from_tuple/1)
+          |> Enum.each(fn event ->
+            broadcast_event(state.subscribers, event)
+          end)
 
-      {:error, reason} ->
-        Logger.error("Failed to get events from watcher: #{inspect(reason)}")
-    end
+        [] ->
+          # No events, which is fine
+          :ok
+
+        {:error, reason} ->
+          Logger.error("Failed to get events from watcher: #{inspect(reason)}")
+      end
+    end)
 
     # Schedule next polling
     schedule_event_polling()
@@ -109,22 +111,30 @@ defmodule FSNotify.Watcher do
   end
 
   @impl true
-  def handle_info({:DOWN, _ref, :process, pid, _reason}, state) do
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, state) do
     # Remove the dead process from subscribers
-    new_subscribers = MapSet.delete(state.subscribers, pid)
+    new_subscribers = Map.delete(state.subscribers, ref)
     new_state = %{state | subscribers: new_subscribers}
 
-    Logger.debug("Removed dead process #{inspect(pid)} from subscribers")
+    Logger.debug("Removed dead subscriber")
     {:noreply, new_state}
   end
 
   @impl true
   def terminate(_reason, state) do
-    if state.watcher_id do
-      Native.stop_watcher(state.watcher_id)
-      Logger.info("Stopped file watcher for path: #{state.path}")
-    end
+    # Broadcast stop message to all subscribers
+    state.subscribers
+    |> Map.values()
+    |> Enum.each(fn pid ->
+      send(pid, {:file_event, self(), :stop})
+    end)
 
+    # Stop all watchers
+    state.watchers
+    |> Map.values()
+    |> Enum.each(&Native.stop_watcher/1)
+
+    Logger.info("Stopped file watchers for paths: #{inspect(state.paths)}")
     :ok
   end
 
@@ -135,9 +145,15 @@ defmodule FSNotify.Watcher do
     Process.send_after(self(), :poll_events, 100)
   end
 
-  defp broadcast_event(subscribers, event) do
-    Enum.each(subscribers, fn pid ->
-      send(pid, {:file_event, event})
+  defp broadcast_event(subscribers, %Event{} = event) do
+    # Convert event to file_system compatible format
+    # Group by path to match file_system's {path, events} format
+    event_data = {event.path, [event.kind]}
+    
+    subscribers
+    |> Map.values()
+    |> Enum.each(fn pid ->
+      send(pid, {:file_event, self(), event_data})
     end)
   end
 end
