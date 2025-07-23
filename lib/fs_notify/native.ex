@@ -65,6 +65,21 @@ defmodule FSNotify.Native do
   def get_watcher_info(_watcher_id), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Start watching a directory or file with debouncing enabled.
+
+  ## Parameters
+  - path: String path to watch
+  - recursive: Boolean indicating whether to watch recursively
+  - backend: Atom specifying the backend (:recommended, :poll, :inotify, :fsevent, :windows, :null)
+  - debounce_ms: Debounce timeout in milliseconds
+
+  ## Returns
+  {:ok, watcher_id} or {:error, reason}
+  """
+  def start_watcher_with_debounce(_path, _recursive, _backend, _debounce_ms),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   List available watcher backends on the current platform.
 
   ## Returns

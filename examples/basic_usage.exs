@@ -14,7 +14,9 @@ defmodule BasicUsageExample do
     IO.puts("Try creating, modifying, or deleting files in this directory...")
     IO.puts("Press Ctrl+C to stop\n")
     
-    case FSNotify.start_link(path, recursive: true) do
+    opts = [recursive: true]
+    
+    case FSNotify.start_link(path, opts) do
       {:ok, watcher_pid} ->
         # Subscribe to events
         FSNotify.subscribe(watcher_pid)

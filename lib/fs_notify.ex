@@ -36,6 +36,7 @@ defmodule FSNotify do
           {:recursive, boolean()}
           | {:name, GenServer.name()}
           | {:backend, :recommended | :poll | :inotify | :fsevent | :kqueue | :windows | :null}
+          | {:debounce_ms, pos_integer()}
 
   @doc """
   Starts a file system watcher process.
@@ -48,6 +49,8 @@ defmodule FSNotify do
     - `:backend` - Watcher backend to use (default: `:recommended`)
       Available backends: `:recommended`, `:poll`, `:inotify` (Linux), 
       `:fsevent` (macOS), `:kqueue` (BSD/macOS), `:windows`, `:null`
+    - `:debounce_ms` - Enable debouncing with specified timeout in milliseconds
+      When enabled, multiple rapid events for the same file are filtered to reduce noise
 
   ## Examples
 
@@ -60,6 +63,10 @@ defmodule FSNotify do
       # With options
       {:ok, pid} = FSNotify.start_link("/home", recursive: false)
       {:ok, pid} = FSNotify.start_link("/tmp", name: TmpWatcher)
+      
+      # With debouncing (reduces event noise)
+      {:ok, pid} = FSNotify.start_link("/tmp", debounce_ms: 500)
+      {:ok, pid} = FSNotify.start_link("/project", backend: :poll, debounce_ms: 1000)
 
   ## Returns
   - `{:ok, pid}` on success

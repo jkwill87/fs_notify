@@ -1,10 +1,12 @@
 use notify::{
     recommended_watcher, Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher, WatcherKind,
 };
+use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer, DebouncedEventKind};
 use rustler::{Atom, Error, NifResult};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
+use std::time::Duration;
 
 mod atoms {
     rustler::atoms! {
@@ -52,13 +54,26 @@ type WatcherResult = Result<
     Error,
 >;
 
+enum WatcherType {
+    Regular {
+        #[allow(dead_code)] // Keep watcher alive for file monitoring
+        watcher: Box<dyn Watcher + Send>,
+        receiver: mpsc::Receiver<Result<Event, notify::Error>>,
+    },
+    Debounced {
+        #[allow(dead_code)] // Keep debouncer alive for file monitoring
+        debouncer: Debouncer<notify::RecommendedWatcher>,
+        receiver: mpsc::Receiver<DebounceEventResult>,
+    },
+}
+
 struct WatcherInfo {
-    #[allow(dead_code)] // Keep watcher alive for file monitoring
-    watcher: Box<dyn Watcher + Send>,
-    receiver: mpsc::Receiver<Result<Event, notify::Error>>,
+    watcher_type: WatcherType,
     backend_kind: WatcherKind,
     path: String,
     recursive: bool,
+    #[allow(dead_code)] // Used for info/debugging purposes
+    debounce_ms: Option<u64>,
 }
 
 // Global storage for watchers
@@ -158,37 +173,69 @@ fn start_watcher_internal(
     path: String,
     recursive: bool,
     backend: BackendType,
+    debounce_ms: Option<u64>,
 ) -> NifResult<(Atom, u64)> {
-    let (mut watcher, receiver, backend_kind) = backend.create_watcher()?;
-
     let watch_path = Path::new(&path);
     let mode = if recursive {
         RecursiveMode::Recursive
     } else {
         RecursiveMode::NonRecursive
     };
-
-    watcher.watch(watch_path, mode).map_err(|_| Error::BadArg)?;
-
+    
     let id = NEXT_WATCHER_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-
-    let watcher_info = WatcherInfo {
-        watcher,
-        receiver,
-        backend_kind,
-        path: path.clone(),
-        recursive,
+    
+    let watcher_info = match debounce_ms {
+        Some(ms) => {
+            // Create debounced watcher
+            let (tx, rx) = mpsc::channel();
+            let mut debouncer = new_debouncer(
+                Duration::from_millis(ms),
+                move |result: DebounceEventResult| {
+                    let _ = tx.send(result);
+                },
+            ).map_err(|_| Error::BadArg)?;
+            
+            // Watch the path
+            debouncer.watcher().watch(watch_path, mode).map_err(|_| Error::BadArg)?;
+            
+            WatcherInfo {
+                watcher_type: WatcherType::Debounced {
+                    debouncer,
+                    receiver: rx,
+                },
+                backend_kind: WatcherKind::Inotify, // Debouncer uses recommended watcher
+                path: path.clone(),
+                recursive,
+                debounce_ms: Some(ms),
+            }
+        },
+        None => {
+            // Create regular watcher
+            let (mut watcher, receiver, backend_kind) = backend.create_watcher()?;
+            watcher.watch(watch_path, mode).map_err(|_| Error::BadArg)?;
+            
+            WatcherInfo {
+                watcher_type: WatcherType::Regular {
+                    watcher,
+                    receiver,
+                },
+                backend_kind,
+                path: path.clone(),
+                recursive,
+                debounce_ms: None,
+            }
+        }
     };
-
+    
     let mut watchers = WATCHERS.lock().unwrap();
     watchers.insert(id, watcher_info);
-
+    
     Ok((atoms::ok(), id))
 }
 
 #[rustler::nif]
 fn start_watcher(path: String, recursive: bool) -> NifResult<(Atom, u64)> {
-    start_watcher_internal(path, recursive, BackendType::Recommended)
+    start_watcher_internal(path, recursive, BackendType::Recommended, None)
 }
 
 #[rustler::nif]
@@ -198,7 +245,18 @@ fn start_watcher_with_backend(
     backend_atom: Atom,
 ) -> NifResult<(Atom, u64)> {
     let backend = BackendType::from_atom(backend_atom)?;
-    start_watcher_internal(path, recursive, backend)
+    start_watcher_internal(path, recursive, backend, None)
+}
+
+#[rustler::nif]
+fn start_watcher_with_debounce(
+    path: String,
+    recursive: bool,
+    backend_atom: Atom,
+    debounce_ms: u64,
+) -> NifResult<(Atom, u64)> {
+    let backend = BackendType::from_atom(backend_atom)?;
+    start_watcher_internal(path, recursive, backend, Some(debounce_ms))
 }
 
 #[rustler::nif]
@@ -218,25 +276,53 @@ fn get_events(id: u64) -> NifResult<Vec<(Atom, String, Atom)>> {
     if let Some(watcher_info) = watchers.get_mut(&id) {
         let mut events = Vec::new();
 
-        // Collect all available events without blocking
-        while let Ok(result) = watcher_info.receiver.try_recv() {
-            match result {
-                Ok(event) => {
-                    for path in event.paths {
-                        let event_atom = event_kind_to_atom(&event.kind);
-                        let path_str = path_to_string(&path);
-                        let file_type_atom = if path.is_dir() {
-                            atoms::directory()
-                        } else {
-                            atoms::file()
-                        };
+        match &mut watcher_info.watcher_type {
+            WatcherType::Regular { receiver, .. } => {
+                // Handle regular watcher events
+                while let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok(event) => {
+                            for path in event.paths {
+                                let event_atom = event_kind_to_atom(&event.kind);
+                                let path_str = path_to_string(&path);
+                                let file_type_atom = if path.is_dir() {
+                                    atoms::directory()
+                                } else {
+                                    atoms::file()
+                                };
 
-                        events.push((event_atom, path_str, file_type_atom));
+                                events.push((event_atom, path_str, file_type_atom));
+                            }
+                        }
+                        Err(_) => {
+                            // Error in file watching, but we'll continue
+                            continue;
+                        }
                     }
                 }
-                Err(_) => {
-                    // Error in file watching, but we'll continue
-                    continue;
+            }
+            WatcherType::Debounced { receiver, .. } => {
+                // Handle debounced watcher events  
+                while let Ok(result) = receiver.try_recv() {
+                    match result {
+                        Ok(debounced_events) => {
+                            for event in debounced_events {
+                                let event_atom = debounced_event_kind_to_atom(&event.kind);
+                                let path_str = path_to_string(&event.path);
+                                let file_type_atom = if event.path.is_dir() {
+                                    atoms::directory()
+                                } else {
+                                    atoms::file()
+                                };
+
+                                events.push((event_atom, path_str, file_type_atom));
+                            }
+                        }
+                        Err(_) => {
+                            // Error in file watching, but we'll continue
+                            continue;
+                        }
+                    }
                 }
             }
         }
@@ -298,6 +384,13 @@ fn event_kind_to_atom(kind: &EventKind) -> Atom {
         EventKind::Modify(_) => atoms::modified(),
         EventKind::Remove(_) => atoms::removed(),
         EventKind::Other => atoms::other(),
+        _ => atoms::unknown(),
+    }
+}
+
+fn debounced_event_kind_to_atom(kind: &DebouncedEventKind) -> Atom {
+    match kind {
+        DebouncedEventKind::Any => atoms::modified(),
         _ => atoms::unknown(),
     }
 }

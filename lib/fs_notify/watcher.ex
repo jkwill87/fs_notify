@@ -12,6 +12,7 @@ defmodule FSNotify.Watcher do
             watchers: %{},
             recursive: true,
             backend: :recommended,
+            debounce_ms: nil,
             subscribers: %{}
 
   @type t :: %__MODULE__{
@@ -19,6 +20,7 @@ defmodule FSNotify.Watcher do
           watchers: %{String.t() => non_neg_integer()},
           recursive: boolean(),
           backend: atom(),
+          debounce_ms: non_neg_integer() | nil,
           subscribers: %{reference() => pid()}
         }
 
@@ -38,15 +40,17 @@ defmodule FSNotify.Watcher do
     paths = List.wrap(path_or_paths)
     recursive = Keyword.get(opts, :recursive, true)
     backend = Keyword.get(opts, :backend, :recommended)
+    debounce_ms = Keyword.get(opts, :debounce_ms)
 
     # Start watchers for each path
     watchers =
       paths
       |> Enum.map(fn path ->
-        case start_watcher_for_backend(path, recursive, backend) do
+        case start_watcher_for_backend(path, recursive, backend, debounce_ms) do
           {:ok, watcher_id} ->
+            debounce_info = if debounce_ms, do: ", debounce: #{debounce_ms}ms", else: ""
             Logger.info(
-              "Started file watcher for path: #{path} (recursive: #{recursive}, backend: #{backend})"
+              "Started file watcher for path: #{path} (recursive: #{recursive}, backend: #{backend}#{debounce_info})"
             )
 
             {path, watcher_id}
@@ -70,6 +74,7 @@ defmodule FSNotify.Watcher do
         watchers: watchers,
         recursive: recursive,
         backend: backend,
+        debounce_ms: debounce_ms,
         subscribers: %{}
       }
 
@@ -145,12 +150,17 @@ defmodule FSNotify.Watcher do
 
   # Private functions
 
-  defp start_watcher_for_backend(path, recursive, :recommended) do
-    Native.start_watcher(path, recursive)
+  defp start_watcher_for_backend(path, recursive, backend, nil) do
+    # No debouncing - use regular watcher
+    case backend do
+      :recommended -> Native.start_watcher(path, recursive)
+      _ -> Native.start_watcher_with_backend(path, recursive, backend)
+    end
   end
 
-  defp start_watcher_for_backend(path, recursive, backend) do
-    Native.start_watcher_with_backend(path, recursive, backend)
+  defp start_watcher_for_backend(path, recursive, backend, debounce_ms) when is_integer(debounce_ms) do
+    # Debouncing enabled - use debounced watcher
+    Native.start_watcher_with_debounce(path, recursive, backend, debounce_ms)
   end
 
   defp schedule_event_polling do
