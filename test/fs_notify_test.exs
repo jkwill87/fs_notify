@@ -142,9 +142,10 @@ defmodule FSNotifyTest do
 
       # Start multiple subscriber processes
       parent = self()
-      
+
       spawn(fn ->
         FSNotify.subscribe(watcher)
+
         receive do
           msg -> send(parent, {:subscriber1, msg})
         after
@@ -154,6 +155,7 @@ defmodule FSNotifyTest do
 
       spawn(fn ->
         FSNotify.subscribe(watcher)
+
         receive do
           msg -> send(parent, {:subscriber2, msg})
         after

@@ -1,7 +1,10 @@
-use notify::{recommended_watcher, EventKind, RecursiveMode, Watcher};
-use rustler::{Error, NifResult};
+use notify::{
+    recommended_watcher, Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher, WatcherKind,
+};
+use rustler::{Atom, Error, NifResult};
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 
 mod atoms {
     rustler::atoms! {
@@ -14,55 +17,282 @@ mod atoms {
         other,
         file,
         directory,
-        unknown
+        unknown,
+        recommended,
+        poll,
+        inotify,
+        fsevent,
+        kqueue,
+        windows,
+        null,
+        invalid_backend,
+        watcher_not_found
     }
+}
+
+#[derive(Debug, Clone)]
+enum BackendType {
+    Recommended,
+    Poll,
+    #[cfg(target_os = "linux")]
+    INotify,
+    #[cfg(target_os = "macos")]
+    FsEvent,
+    #[cfg(target_os = "windows")]
+    Windows,
+    Null,
+}
+
+type WatcherResult = Result<
+    (
+        Box<dyn Watcher + Send>,
+        mpsc::Receiver<Result<Event, notify::Error>>,
+        WatcherKind,
+    ),
+    Error,
+>;
+
+struct WatcherInfo {
+    #[allow(dead_code)] // Keep watcher alive for file monitoring
+    watcher: Box<dyn Watcher + Send>,
+    receiver: mpsc::Receiver<Result<Event, notify::Error>>,
+    backend_kind: WatcherKind,
+    path: String,
+    recursive: bool,
 }
 
 // Global storage for watchers
 static NEXT_WATCHER_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static WATCHERS: once_cell::sync::Lazy<Arc<Mutex<HashMap<u64, WatcherInfo>>>> =
+    once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
 
-#[rustler::nif]
-fn start_watcher(path: String, recursive: bool) -> NifResult<(rustler::Atom, u64)> {
-    let (_tx, _rx) = mpsc::channel();
+impl BackendType {
+    fn from_atom(atom: Atom) -> Result<Self, Error> {
+        if atom == atoms::recommended() {
+            Ok(BackendType::Recommended)
+        } else if atom == atoms::poll() {
+            Ok(BackendType::Poll)
+        } else if atom == atoms::inotify() {
+            #[cfg(target_os = "linux")]
+            {
+                Ok(BackendType::INotify)
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                Err(Error::BadArg)
+            }
+        } else if atom == atoms::fsevent() {
+            #[cfg(target_os = "macos")]
+            {
+                Ok(BackendType::FsEvent)
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Err(Error::BadArg)
+            }
+        } else if atom == atoms::kqueue() {
+            // Kqueue support requires special feature flag in notify crate
+            Err(Error::BadArg)
+        } else if atom == atoms::windows() {
+            #[cfg(target_os = "windows")]
+            {
+                Ok(BackendType::Windows)
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                Err(Error::BadArg)
+            }
+        } else if atom == atoms::null() {
+            Ok(BackendType::Null)
+        } else {
+            Err(Error::BadArg)
+        }
+    }
 
-    match recommended_watcher(_tx) {
-        Ok(mut watcher) => {
-            let watch_path = Path::new(&path);
-            let mode = if recursive {
-                RecursiveMode::Recursive
-            } else {
-                RecursiveMode::NonRecursive
-            };
+    fn create_watcher(&self) -> WatcherResult {
+        let (tx, rx) = mpsc::channel();
 
-            match watcher.watch(watch_path, mode) {
-                Ok(_) => {
-                    let id = NEXT_WATCHER_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    // Note: In a real implementation, you'd want to store the watcher somewhere
-                    // so it doesn't get dropped. For now, we'll just return success.
-                    Ok((atoms::ok(), id))
-                }
-                Err(_) => Err(Error::BadArg),
+        match self {
+            BackendType::Recommended => {
+                let watcher = recommended_watcher(tx).map_err(|_| Error::BadArg)?;
+                let kind = WatcherKind::Inotify; // Default for recommended
+                Ok((Box::new(watcher), rx, kind))
+            }
+            BackendType::Poll => {
+                let watcher = PollWatcher::new(tx, Config::default()).map_err(|_| Error::BadArg)?;
+                let kind = WatcherKind::PollWatcher;
+                Ok((Box::new(watcher), rx, kind))
+            }
+            #[cfg(target_os = "linux")]
+            BackendType::INotify => {
+                let watcher = notify::INotifyWatcher::new(tx, Config::default())
+                    .map_err(|_| Error::BadArg)?;
+                let kind = WatcherKind::Inotify;
+                Ok((Box::new(watcher), rx, kind))
+            }
+            #[cfg(target_os = "macos")]
+            BackendType::FsEvent => {
+                let watcher = notify::FsEventWatcher::new(tx, Config::default())
+                    .map_err(|_| Error::BadArg)?;
+                let kind = WatcherKind::Fsevent;
+                Ok((Box::new(watcher), rx, kind))
+            }
+            #[cfg(target_os = "windows")]
+            BackendType::Windows => {
+                let watcher = notify::ReadDirectoryChangesWatcher::new(tx, Config::default())
+                    .map_err(|_| Error::BadArg)?;
+                let kind = WatcherKind::ReadDirectoryChangesWatcher;
+                Ok((Box::new(watcher), rx, kind))
+            }
+            BackendType::Null => {
+                let watcher =
+                    notify::NullWatcher::new(tx, Config::default()).map_err(|_| Error::BadArg)?;
+                let kind = WatcherKind::NullWatcher;
+                Ok((Box::new(watcher), rx, kind))
             }
         }
-        Err(_) => Err(Error::BadArg),
+    }
+}
+
+fn start_watcher_internal(
+    path: String,
+    recursive: bool,
+    backend: BackendType,
+) -> NifResult<(Atom, u64)> {
+    let (mut watcher, receiver, backend_kind) = backend.create_watcher()?;
+
+    let watch_path = Path::new(&path);
+    let mode = if recursive {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+
+    watcher.watch(watch_path, mode).map_err(|_| Error::BadArg)?;
+
+    let id = NEXT_WATCHER_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
+    let watcher_info = WatcherInfo {
+        watcher,
+        receiver,
+        backend_kind,
+        path: path.clone(),
+        recursive,
+    };
+
+    let mut watchers = WATCHERS.lock().unwrap();
+    watchers.insert(id, watcher_info);
+
+    Ok((atoms::ok(), id))
+}
+
+#[rustler::nif]
+fn start_watcher(path: String, recursive: bool) -> NifResult<(Atom, u64)> {
+    start_watcher_internal(path, recursive, BackendType::Recommended)
+}
+
+#[rustler::nif]
+fn start_watcher_with_backend(
+    path: String,
+    recursive: bool,
+    backend_atom: Atom,
+) -> NifResult<(Atom, u64)> {
+    let backend = BackendType::from_atom(backend_atom)?;
+    start_watcher_internal(path, recursive, backend)
+}
+
+#[rustler::nif]
+fn stop_watcher(id: u64) -> Atom {
+    let mut watchers = WATCHERS.lock().unwrap();
+    if watchers.remove(&id).is_some() {
+        atoms::ok()
+    } else {
+        atoms::watcher_not_found()
     }
 }
 
 #[rustler::nif]
-fn stop_watcher(_id: u64) -> rustler::Atom {
-    // In a real implementation, you'd remove the watcher from storage
-    atoms::ok()
+fn get_events(id: u64) -> NifResult<Vec<(Atom, String, Atom)>> {
+    let mut watchers = WATCHERS.lock().unwrap();
+
+    if let Some(watcher_info) = watchers.get_mut(&id) {
+        let mut events = Vec::new();
+
+        // Collect all available events without blocking
+        while let Ok(result) = watcher_info.receiver.try_recv() {
+            match result {
+                Ok(event) => {
+                    for path in event.paths {
+                        let event_atom = event_kind_to_atom(&event.kind);
+                        let path_str = path_to_string(&path);
+                        let file_type_atom = if path.is_dir() {
+                            atoms::directory()
+                        } else {
+                            atoms::file()
+                        };
+
+                        events.push((event_atom, path_str, file_type_atom));
+                    }
+                }
+                Err(_) => {
+                    // Error in file watching, but we'll continue
+                    continue;
+                }
+            }
+        }
+
+        Ok(events)
+    } else {
+        Err(Error::BadArg)
+    }
 }
 
 #[rustler::nif]
-fn get_events(_id: u64) -> NifResult<Vec<(rustler::Atom, String, rustler::Atom)>> {
-    // In a real implementation, you'd get events from the stored receiver
-    // For now, return empty list
-    Ok(vec![])
+fn get_watcher_info(id: u64) -> NifResult<(Atom, String, bool, Atom)> {
+    let watchers = WATCHERS.lock().unwrap();
+
+    if let Some(watcher_info) = watchers.get(&id) {
+        let backend_atom = match watcher_info.backend_kind {
+            WatcherKind::Inotify => atoms::inotify(),
+            WatcherKind::Fsevent => atoms::fsevent(),
+            WatcherKind::Kqueue => atoms::kqueue(),
+            WatcherKind::PollWatcher => atoms::poll(),
+            WatcherKind::ReadDirectoryChangesWatcher => atoms::windows(),
+            WatcherKind::NullWatcher => atoms::null(),
+            _ => atoms::unknown(),
+        };
+
+        Ok((
+            atoms::ok(),
+            watcher_info.path.clone(),
+            watcher_info.recursive,
+            backend_atom,
+        ))
+    } else {
+        Err(Error::BadArg)
+    }
 }
 
-#[allow(dead_code)]
-fn event_kind_to_atom(kind: &EventKind) -> rustler::Atom {
+#[rustler::nif]
+fn list_available_backends() -> Vec<Atom> {
+    let mut backends = vec![atoms::recommended(), atoms::poll(), atoms::null()];
+
+    #[cfg(target_os = "linux")]
+    backends.push(atoms::inotify());
+
+    #[cfg(target_os = "macos")]
+    {
+        backends.push(atoms::fsevent());
+        backends.push(atoms::kqueue());
+    }
+
+    #[cfg(target_os = "windows")]
+    backends.push(atoms::windows());
+
+    backends
+}
+
+fn event_kind_to_atom(kind: &EventKind) -> Atom {
     match kind {
         EventKind::Create(_) => atoms::created(),
         EventKind::Modify(_) => atoms::modified(),
@@ -72,7 +302,6 @@ fn event_kind_to_atom(kind: &EventKind) -> rustler::Atom {
     }
 }
 
-#[allow(dead_code)]
 fn path_to_string(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }

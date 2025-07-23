@@ -3,7 +3,7 @@
 # Basic usage example for FSNotify
 # Run with: elixir examples/basic_usage.exs
 
-Mix.install([{:fs_notify_ex, path: "."}])
+Mix.install([{:fs_notify, path: "."}])
 
 defmodule BasicUsageExample do
   def run do

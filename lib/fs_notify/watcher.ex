@@ -8,17 +8,17 @@ defmodule FSNotify.Watcher do
 
   alias FSNotify.{Native, Event}
 
-  defstruct [
-    paths: [],
-    watchers: %{},
-    recursive: true,
-    subscribers: %{}
-  ]
+  defstruct paths: [],
+            watchers: %{},
+            recursive: true,
+            backend: :recommended,
+            subscribers: %{}
 
   @type t :: %__MODULE__{
           paths: [String.t()],
           watchers: %{String.t() => non_neg_integer()},
           recursive: boolean(),
+          backend: atom(),
           subscribers: %{reference() => pid()}
         }
 
@@ -37,17 +37,25 @@ defmodule FSNotify.Watcher do
   def init({path_or_paths, opts}) do
     paths = List.wrap(path_or_paths)
     recursive = Keyword.get(opts, :recursive, true)
-    
+    backend = Keyword.get(opts, :backend, :recommended)
+
     # Start watchers for each path
-    watchers = 
+    watchers =
       paths
       |> Enum.map(fn path ->
-        case Native.start_watcher(path, recursive) do
+        case start_watcher_for_backend(path, recursive, backend) do
           {:ok, watcher_id} ->
-            Logger.info("Started file watcher for path: #{path} (recursive: #{recursive})")
+            Logger.info(
+              "Started file watcher for path: #{path} (recursive: #{recursive}, backend: #{backend})"
+            )
+
             {path, watcher_id}
+
           {:error, reason} ->
-            Logger.error("Failed to start file watcher for path: #{path}, reason: #{inspect(reason)}")
+            Logger.error(
+              "Failed to start file watcher for path: #{path}, reason: #{inspect(reason)}"
+            )
+
             nil
         end
       end)
@@ -61,6 +69,7 @@ defmodule FSNotify.Watcher do
         paths: paths,
         watchers: watchers,
         recursive: recursive,
+        backend: backend,
         subscribers: %{}
       }
 
@@ -87,17 +96,13 @@ defmodule FSNotify.Watcher do
     state.watchers
     |> Enum.each(fn {_path, watcher_id} ->
       case Native.get_events(watcher_id) do
-        {:ok, events} ->
+        events when is_list(events) ->
           # Convert raw events to Event structs and broadcast
           events
           |> Enum.map(&Event.from_tuple/1)
           |> Enum.each(fn event ->
             broadcast_event(state.subscribers, event)
           end)
-
-        [] ->
-          # No events, which is fine
-          :ok
 
         {:error, reason} ->
           Logger.error("Failed to get events from watcher: #{inspect(reason)}")
@@ -140,6 +145,14 @@ defmodule FSNotify.Watcher do
 
   # Private functions
 
+  defp start_watcher_for_backend(path, recursive, :recommended) do
+    Native.start_watcher(path, recursive)
+  end
+
+  defp start_watcher_for_backend(path, recursive, backend) do
+    Native.start_watcher_with_backend(path, recursive, backend)
+  end
+
   defp schedule_event_polling do
     # Poll every 100ms for events
     Process.send_after(self(), :poll_events, 100)
@@ -149,7 +162,7 @@ defmodule FSNotify.Watcher do
     # Convert event to file_system compatible format
     # Group by path to match file_system's {path, events} format
     event_data = {event.path, [event.kind]}
-    
+
     subscribers
     |> Map.values()
     |> Enum.each(fn pid ->

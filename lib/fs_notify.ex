@@ -35,7 +35,7 @@ defmodule FSNotify do
   @type start_option ::
           {:recursive, boolean()}
           | {:name, GenServer.name()}
-          | {:backend, atom()}
+          | {:backend, :recommended | :poll | :inotify | :fsevent | :kqueue | :windows | :null}
 
   @doc """
   Starts a file system watcher process.
@@ -45,7 +45,9 @@ defmodule FSNotify do
   - `options` - Keyword list of options:
     - `:recursive` - Whether to watch subdirectories (default: `true`)
     - `:name` - A name to register the process under
-    - `:backend` - Backend to use (default: `:fs_notify`)
+    - `:backend` - Watcher backend to use (default: `:recommended`)
+      Available backends: `:recommended`, `:poll`, `:inotify` (Linux), 
+      `:fsevent` (macOS), `:kqueue` (BSD/macOS), `:windows`, `:null`
 
   ## Examples
 
@@ -69,7 +71,7 @@ defmodule FSNotify do
   def start_link(path_or_paths, options) do
     {name_opts, other_opts} = Keyword.split(options, [:name])
     start_opts = if name_opts[:name], do: [name: name_opts[:name]], else: []
-    
+
     Watcher.start_link({path_or_paths, other_opts}, start_opts)
   end
 
@@ -89,5 +91,67 @@ defmodule FSNotify do
   @spec subscribe(GenServer.server()) :: :ok
   def subscribe(watcher) do
     GenServer.call(watcher, :subscribe)
+  end
+
+  @doc """
+  List available watcher backends on the current platform.
+
+  ## Returns
+  List of atoms representing available backends
+
+  ## Examples
+      FSNotify.available_backends()
+      # => [:recommended, :poll, :inotify] # on Linux
+      # => [:recommended, :poll, :fsevent, :kqueue] # on macOS
+  """
+  @spec available_backends() :: [atom()]
+  def available_backends do
+    FSNotify.Native.list_available_backends()
+  end
+
+  @doc """
+  Get information about a watcher's configuration.
+
+  ## Parameters
+  - `watcher` - The watcher process (pid or name)
+
+  ## Returns
+  `{:ok, %{path: path, recursive: boolean, backend: atom}}` or `{:error, reason}`
+
+  ## Examples  
+      FSNotify.watcher_info(watcher)
+      # => {:ok, %{path: "/tmp", recursive: true, backend: :inotify}}
+  """
+  @spec watcher_info(GenServer.server()) :: {:ok, map()} | {:error, term()}
+  def watcher_info(watcher) do
+    try do
+      state = :sys.get_state(watcher)
+
+      backend_info =
+        case Map.keys(state.watchers) do
+          [path | _] ->
+            case Map.get(state.watchers, path) do
+              watcher_id when is_integer(watcher_id) ->
+                case FSNotify.Native.get_watcher_info(watcher_id) do
+                  {:ok, native_path, recursive, backend} ->
+                    {:ok, %{path: native_path, recursive: recursive, backend: backend}}
+
+                  _ ->
+                    {:ok,
+                     %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
+                end
+
+              _ ->
+                {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
+            end
+
+          [] ->
+            {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
+        end
+
+      backend_info
+    rescue
+      _ -> {:error, :watcher_not_accessible}
+    end
   end
 end
