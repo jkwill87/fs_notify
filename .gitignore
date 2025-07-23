@@ -1,9 +1,61 @@
+# Elixir/Mix artifacts
 *.ez
 /_build/
 /cover/
 /deps/
 /doc/
-native/fs_notify/target
 /tmp/
 erl_crash.dump
 fsnotify-*.tar
+.mix_test_failures
+*.beam
+.fetch
+
+# Rust artifacts
+native/fs_notify/target
+*.rlib
+.rustc_info.json
+.cargo-lock
+
+# Native artifacts
+priv/native/*.so
+priv/native/*.dll
+priv/native/*.dylib
+
+# IDE/Editor files
+.elixir_ls/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.directory
+
+# Dialyzer PLT files
+*.plt
+*.plt.*
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Local configuration
+config/*.secret.exs
