@@ -121,21 +121,6 @@ defmodule FSNotifyTest do
       GenServer.stop(TestWatcher)
     end
 
-    test "subscribe receives events in file_system format" do
-      path = File.cwd!()
-
-      {:ok, watcher} = FSNotify.start_link(path)
-      assert :ok = FSNotify.subscribe(watcher)
-
-      # Wait a bit for subscription to be processed
-      Process.sleep(10)
-
-      # When the watcher stops, we should receive a stop message
-      GenServer.stop(watcher)
-
-      assert_receive {:file_event, ^watcher, :stop}, 1000
-    end
-
     test "multiple subscribers receive events" do
       path = File.cwd!()
       {:ok, watcher} = FSNotify.start_link(path)

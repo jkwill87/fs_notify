@@ -55,16 +55,6 @@ end
 GenServer.stop(watcher)
 ```
 
-### API Compatibility
-
-FSNotify follows the same subscription API pattern as the popular [file_system](https://github.com/falood/file_system) library, making it easy to switch between implementations:
-
-```elixir
-# Both libraries use the same message format
-{:file_event, watcher_pid, {path, events}}
-{:file_event, watcher_pid, :stop}
-```
-
 ### Options
 
 ```elixir
@@ -82,12 +72,14 @@ FSNotify follows the same subscription API pattern as the popular [file_system](
 
 Events are delivered as lists of atoms in the message tuple `{path, events}`:
 
-- `:created` - File or directory was created
-- `:modified` - File or directory was modified
-- `:removed` - File or directory was removed
-- `:renamed` - File or directory was renamed
-- `:other` - Other events
-- `:unknown` - Unknown event type
+| Event Type | Description |
+|------------|-------------|
+| `:created` | File or directory was created |
+| `:modified` | File or directory was modified |
+| `:removed` | File or directory was removed |
+| `:renamed` | File or directory was renamed |
+| `:other` | Other events |
+| `:unknown` | Unknown event type |
 
 ### Internal Event Structure
 
