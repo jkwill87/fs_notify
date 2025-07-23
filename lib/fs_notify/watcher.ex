@@ -4,9 +4,11 @@ defmodule FSNotify.Watcher do
   """
 
   use GenServer
-  require Logger
 
-  alias FSNotify.{Native, Event}
+  alias FSNotify.Event
+  alias FSNotify.Native
+
+  require Logger
 
   defstruct paths: [],
             watchers: %{},
@@ -49,6 +51,7 @@ defmodule FSNotify.Watcher do
         case start_watcher_for_backend(path, recursive, backend, debounce_ms) do
           {:ok, watcher_id} ->
             debounce_info = if debounce_ms, do: ", debounce: #{debounce_ms}ms", else: ""
+
             Logger.info(
               "Started file watcher for path: #{path} (recursive: #{recursive}, backend: #{backend}#{debounce_info})"
             )
@@ -56,15 +59,13 @@ defmodule FSNotify.Watcher do
             {path, watcher_id}
 
           {:error, reason} ->
-            Logger.error(
-              "Failed to start file watcher for path: #{path}, reason: #{inspect(reason)}"
-            )
+            Logger.error("Failed to start file watcher for path: #{path}, reason: #{inspect(reason)}")
 
             nil
         end
       end)
       |> Enum.reject(&is_nil/1)
-      |> Enum.into(%{})
+      |> Map.new()
 
     if map_size(watchers) == 0 do
       {:stop, :no_watchers_started}
@@ -98,8 +99,7 @@ defmodule FSNotify.Watcher do
   @impl true
   def handle_info(:poll_events, state) do
     # Poll for events from all native watchers
-    state.watchers
-    |> Enum.each(fn {_path, watcher_id} ->
+    Enum.each(state.watchers, fn {_path, watcher_id} ->
       case Native.get_events(watcher_id) do
         events when is_list(events) ->
           # Convert raw events to Event structs and broadcast
@@ -169,8 +169,6 @@ defmodule FSNotify.Watcher do
   end
 
   defp broadcast_event(subscribers, %Event{} = event) do
-    # Convert event to file_system compatible format
-    # Group by path to match file_system's {path, events} format
     event_data = {event.path, [event.kind]}
 
     subscribers

@@ -31,7 +31,8 @@ defmodule FSNotify.MixProject do
       {:rustler, "~> 0.36.2"},
       {:recode, "~> 0.7.3", only: :dev, runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, "~> 0.38.2", only: :dev, runtime: false}
+      {:ex_doc, "~> 0.38.2", only: :dev, runtime: false},
+      {:styler, "~> 1.2", only: [:dev, :test], runtime: false}
     ]
   end
 end

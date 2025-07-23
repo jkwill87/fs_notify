@@ -131,34 +131,31 @@ defmodule FSNotify do
   """
   @spec watcher_info(GenServer.server()) :: {:ok, map()} | {:error, term()}
   def watcher_info(watcher) do
-    try do
-      state = :sys.get_state(watcher)
+    state = :sys.get_state(watcher)
 
-      backend_info =
-        case Map.keys(state.watchers) do
-          [path | _] ->
-            case Map.get(state.watchers, path) do
-              watcher_id when is_integer(watcher_id) ->
-                case FSNotify.Native.get_watcher_info(watcher_id) do
-                  {:ok, native_path, recursive, backend} ->
-                    {:ok, %{path: native_path, recursive: recursive, backend: backend}}
+    backend_info =
+      case Map.keys(state.watchers) do
+        [path | _] ->
+          case Map.get(state.watchers, path) do
+            watcher_id when is_integer(watcher_id) ->
+              case FSNotify.Native.get_watcher_info(watcher_id) do
+                {:ok, native_path, recursive, backend} ->
+                  {:ok, %{path: native_path, recursive: recursive, backend: backend}}
 
-                  _ ->
-                    {:ok,
-                     %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
-                end
+                _ ->
+                  {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
+              end
 
-              _ ->
-                {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
-            end
+            _ ->
+              {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
+          end
 
-          [] ->
-            {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
-        end
+        [] ->
+          {:ok, %{paths: state.paths, recursive: state.recursive, backend: state.backend}}
+      end
 
-      backend_info
-    rescue
-      _ -> {:error, :watcher_not_accessible}
-    end
+    backend_info
+  rescue
+    _ -> {:error, :watcher_not_accessible}
   end
 end

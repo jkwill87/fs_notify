@@ -28,8 +28,7 @@ defmodule FSNotify.Native do
   ## Returns
   {:ok, watcher_id} or {:error, reason}
   """
-  def start_watcher_with_backend(_path, _recursive, _backend),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def start_watcher_with_backend(_path, _recursive, _backend), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Stop a file watcher.
@@ -76,8 +75,7 @@ defmodule FSNotify.Native do
   ## Returns
   {:ok, watcher_id} or {:error, reason}
   """
-  def start_watcher_with_debounce(_path, _recursive, _backend, _debounce_ms),
-    do: :erlang.nif_error(:nif_not_loaded)
+  def start_watcher_with_debounce(_path, _recursive, _backend, _debounce_ms), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   List available watcher backends on the current platform.
@@ -85,5 +83,5 @@ defmodule FSNotify.Native do
   ## Returns
   List of atoms representing available backends
   """
-  def list_available_backends(), do: :erlang.nif_error(:nif_not_loaded)
+  def list_available_backends, do: :erlang.nif_error(:nif_not_loaded)
 end

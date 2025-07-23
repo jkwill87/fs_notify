@@ -1,8 +1,10 @@
 defmodule FSNotifyTest do
   use ExUnit.Case
-  doctest FSNotify
 
-  alias FSNotify.{Native, Event}
+  alias FSNotify.Event
+  alias FSNotify.Native
+
+  doctest FSNotify
 
   describe "FSNotify.Native" do
     test "can start and stop a watcher" do
