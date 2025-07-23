@@ -52,7 +52,7 @@ defmodule FSNotify.Watcher do
           {:ok, watcher_id} ->
             debounce_info = if debounce_ms, do: ", debounce: #{debounce_ms}ms", else: ""
 
-            Logger.info(
+            Logger.debug(
               "Started file watcher for path: #{path} (recursive: #{recursive}, backend: #{backend}#{debounce_info})"
             )
 
@@ -144,7 +144,7 @@ defmodule FSNotify.Watcher do
     |> Map.values()
     |> Enum.each(&Native.stop_watcher/1)
 
-    Logger.info("Stopped file watchers for paths: #{inspect(state.paths)}")
+    Logger.debug("Stopped file watchers for paths: #{inspect(state.paths)}")
     :ok
   end
 
