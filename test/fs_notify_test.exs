@@ -94,13 +94,20 @@ defmodule FSNotifyTest do
     end
 
     test "can start with multiple paths" do
-      paths = [File.cwd!(), System.tmp_dir!()]
+      # Create a temporary directory within the project for testing
+      temp_dir = Path.join(File.cwd!(), "test_temp")
+      File.mkdir_p!(temp_dir)
+
+      paths = [File.cwd!(), temp_dir]
 
       assert {:ok, pid} = FSNotify.start_link(paths)
       assert is_pid(pid)
       assert Process.alive?(pid)
 
       GenServer.stop(pid)
+
+      # Clean up
+      File.rm_rf!(temp_dir)
     end
 
     test "can start with options" do
