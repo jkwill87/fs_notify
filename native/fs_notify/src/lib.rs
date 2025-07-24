@@ -16,7 +16,7 @@ mod atoms {
         modified,
         removed,
         renamed,
-        other,
+        meta,
         file,
         directory,
         unknown,
@@ -383,7 +383,7 @@ fn event_kind_to_atom(kind: &EventKind) -> Atom {
         EventKind::Create(_) => atoms::created(),
         EventKind::Modify(_) => atoms::modified(),
         EventKind::Remove(_) => atoms::removed(),
-        EventKind::Other => atoms::other(),
+        EventKind::Other => atoms::meta(),
         _ => atoms::unknown(),
     }
 }

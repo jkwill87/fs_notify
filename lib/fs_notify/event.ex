@@ -3,7 +3,7 @@ defmodule FSNotify.Event do
   Defines the structure and types for file system events.
   """
 
-  @type event_kind :: :created | :modified | :removed | :renamed | :other | :unknown
+  @type event_kind :: :created | :modified | :removed | :renamed | :meta | :unknown
   @type file_type :: :file | :directory | :unknown
 
   @type t :: %__MODULE__{
