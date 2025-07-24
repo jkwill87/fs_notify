@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  MIX_ENV: test
+
+jobs:
+  test:
+    name: Test (Elixir ${{ matrix.elixir }}, OTP ${{ matrix.otp }})
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Latest versions
+          - elixir: "1.18.1"
+            otp: "27.2"
+            os: ubuntu-22.04
+            rust: stable
+            lint: true
+            dialyzer: true
+          # macOS testing
+          - elixir: "1.18.1"
+            otp: "27.2"
+            os: macos-13
+            rust: stable
+          # Windows testing
+          - elixir: "1.18.1"
+            otp: "27.2"
+            os: windows-2022
+            rust: stable
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ matrix.rust }}
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            native/fs_notify/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.toml', '**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Cache Elixir dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ matrix.elixir }}-${{ matrix.otp }}-
+            ${{ runner.os }}-mix-
+
+      - name: Install Elixir dependencies
+        run: mix deps.get
+
+      - name: Check Rust formatting
+        if: matrix.lint
+        run: cargo fmt --manifest-path native/fs_notify/Cargo.toml --check
+
+      - name: Run Rust clippy
+        if: matrix.lint
+        run: cargo clippy --manifest-path native/fs_notify/Cargo.toml -- -D warnings
+
+      - name: Compile project
+        run: mix compile --warnings-as-errors
+
+      - name: Check Elixir formatting
+        if: matrix.lint
+        run: mix format --check-formatted
+
+      - name: Run tests
+        run: mix test
+
+      - name: Cache PLT files
+        if: matrix.dialyzer
+        uses: actions/cache@v4
+        with:
+          path: priv/plts
+          key: ${{ runner.os }}-dialyzer-${{ matrix.elixir }}-${{ matrix.otp }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-dialyzer-${{ matrix.elixir }}-${{ matrix.otp }}-
+            ${{ runner.os }}-dialyzer-
+
+      - name: Run Dialyzer
+        if: matrix.dialyzer
+        run: mix dialyzer
