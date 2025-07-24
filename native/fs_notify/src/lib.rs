@@ -130,7 +130,15 @@ impl BackendType {
         match self {
             BackendType::Recommended => {
                 let watcher = recommended_watcher(tx).map_err(|_| Error::BadArg)?;
-                let kind = WatcherKind::Inotify; // Default for recommended
+                // Determine the backend kind based on the platform
+                #[cfg(target_os = "linux")]
+                let kind = WatcherKind::Inotify;
+                #[cfg(target_os = "macos")]
+                let kind = WatcherKind::Fsevent;
+                #[cfg(target_os = "windows")]
+                let kind = WatcherKind::ReadDirectoryChangesWatcher;
+                #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+                let kind = WatcherKind::PollWatcher;
                 Ok((Box::new(watcher), rx, kind))
             }
             BackendType::Poll => {
@@ -202,12 +210,22 @@ fn start_watcher_internal(
                 .watch(watch_path, mode)
                 .map_err(|_| Error::BadArg)?;
 
+            // Determine the backend kind based on the platform (debouncer uses recommended watcher)
+            #[cfg(target_os = "linux")]
+            let backend_kind = WatcherKind::Inotify;
+            #[cfg(target_os = "macos")]
+            let backend_kind = WatcherKind::Fsevent;
+            #[cfg(target_os = "windows")]
+            let backend_kind = WatcherKind::ReadDirectoryChangesWatcher;
+            #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+            let backend_kind = WatcherKind::PollWatcher;
+
             WatcherInfo {
                 watcher_type: WatcherType::Debounced {
                     debouncer,
                     receiver: rx,
                 },
-                backend_kind: WatcherKind::Inotify, // Debouncer uses recommended watcher
+                backend_kind,
                 path: path.clone(),
                 recursive,
                 debounce_ms: Some(ms),
