@@ -1,7 +1,7 @@
 use notify::{
     recommended_watcher, Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher, WatcherKind,
 };
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult, Debouncer, DebouncedEventKind};
+use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEventKind, Debouncer};
 use rustler::{Atom, Error, NifResult};
 use std::collections::HashMap;
 use std::path::Path;
@@ -181,9 +181,9 @@ fn start_watcher_internal(
     } else {
         RecursiveMode::NonRecursive
     };
-    
+
     let id = NEXT_WATCHER_ID.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    
+
     let watcher_info = match debounce_ms {
         Some(ms) => {
             // Create debounced watcher
@@ -193,11 +193,15 @@ fn start_watcher_internal(
                 move |result: DebounceEventResult| {
                     let _ = tx.send(result);
                 },
-            ).map_err(|_| Error::BadArg)?;
-            
+            )
+            .map_err(|_| Error::BadArg)?;
+
             // Watch the path
-            debouncer.watcher().watch(watch_path, mode).map_err(|_| Error::BadArg)?;
-            
+            debouncer
+                .watcher()
+                .watch(watch_path, mode)
+                .map_err(|_| Error::BadArg)?;
+
             WatcherInfo {
                 watcher_type: WatcherType::Debounced {
                     debouncer,
@@ -208,17 +212,14 @@ fn start_watcher_internal(
                 recursive,
                 debounce_ms: Some(ms),
             }
-        },
+        }
         None => {
             // Create regular watcher
             let (mut watcher, receiver, backend_kind) = backend.create_watcher()?;
             watcher.watch(watch_path, mode).map_err(|_| Error::BadArg)?;
-            
+
             WatcherInfo {
-                watcher_type: WatcherType::Regular {
-                    watcher,
-                    receiver,
-                },
+                watcher_type: WatcherType::Regular { watcher, receiver },
                 backend_kind,
                 path: path.clone(),
                 recursive,
@@ -226,10 +227,10 @@ fn start_watcher_internal(
             }
         }
     };
-    
+
     let mut watchers = WATCHERS.lock().unwrap();
     watchers.insert(id, watcher_info);
-    
+
     Ok((atoms::ok(), id))
 }
 
@@ -302,7 +303,7 @@ fn get_events(id: u64) -> NifResult<Vec<(Atom, String, Atom)>> {
                 }
             }
             WatcherType::Debounced { receiver, .. } => {
-                // Handle debounced watcher events  
+                // Handle debounced watcher events
                 while let Ok(result) = receiver.try_recv() {
                     match result {
                         Ok(debounced_events) => {
