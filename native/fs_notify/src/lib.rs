@@ -24,7 +24,6 @@ mod atoms {
         poll,
         inotify,
         fsevent,
-        kqueue,
         windows,
         null,
         invalid_backend,
@@ -105,9 +104,6 @@ impl BackendType {
             {
                 Err(Error::BadArg)
             }
-        } else if atom == atoms::kqueue() {
-            // Kqueue support requires special feature flag in notify crate
-            Err(Error::BadArg)
         } else if atom == atoms::windows() {
             #[cfg(target_os = "windows")]
             {
@@ -360,7 +356,6 @@ fn get_watcher_info(id: u64) -> NifResult<(Atom, String, bool, Atom)> {
         let backend_atom = match watcher_info.backend_kind {
             WatcherKind::Inotify => atoms::inotify(),
             WatcherKind::Fsevent => atoms::fsevent(),
-            WatcherKind::Kqueue => atoms::kqueue(),
             WatcherKind::PollWatcher => atoms::poll(),
             WatcherKind::ReadDirectoryChangesWatcher => atoms::windows(),
             WatcherKind::NullWatcher => atoms::null(),
@@ -386,10 +381,7 @@ fn list_available_backends() -> Vec<Atom> {
     backends.push(atoms::inotify());
 
     #[cfg(target_os = "macos")]
-    {
-        backends.push(atoms::fsevent());
-        backends.push(atoms::kqueue());
-    }
+    backends.push(atoms::fsevent());
 
     #[cfg(target_os = "windows")]
     backends.push(atoms::windows());
