@@ -6,7 +6,7 @@
 /doc/
 /tmp/
 erl_crash.dump
-fsnotify-*.tar
+fs_notify-*.tar
 .mix_test_failures
 *.beam
 .fetch

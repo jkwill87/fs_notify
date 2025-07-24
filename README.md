@@ -1,8 +1,8 @@
-# fs_notify_ex
+# fs_notify
 
 Cross-platform file system notification library for Elixir.
 
-FSNotify provides a simple interface for watching files and directories for changes across different operating systems. It uses Rustler to create a NIF (Native Implemented Function) that leverages the high-performance Rust notify library.
+fs_notify (file system notify) provides a simple interface for watching files and directories for changes across different operating systems. It uses Rustler to create a NIF (Native Implemented Function) that leverages the high-performance Rust [notify](https://github.com/notify-rs/notify) library.
 
 ## Features
 
@@ -14,12 +14,12 @@ FSNotify provides a simple interface for watching files and directories for chan
 
 ## Installation
 
-Add `fs_notify_ex` to your list of dependencies in `mix.exs`:
+Add `fs_notify` to your list of dependencies in `mix.exs`:
 
 ```elixir
 def deps do
   [
-    {:fs_notify_ex, "~> 0.1.0"}
+    {:fs_notify, "~> 0.1.0"}
   ]
 end
 ```
